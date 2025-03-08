@@ -25,9 +25,9 @@ def main() -> None:
 	# Exemple de description de tâche
 	taskDescription: str = "générer un script python modulaire et bien structuré"
 	
-	# Détermination du nombre d'agents enfants et délégation de la tâche
-	numAgents: int = motherAgent.determineNumberOfAgents(taskDescription)
-	motherAgent.spawnChildAgents(numAgents)
+	# Détermination du plan des agents (nombre et rôles)
+	agentPlan = motherAgent.determineNumberOfAgents(taskDescription)
+	motherAgent.spawnChildAgents(agentPlan)
 	motherAgent.delegateTasks(taskDescription)
 
 if __name__ == "__main__":

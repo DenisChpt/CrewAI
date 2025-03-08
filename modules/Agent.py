@@ -1,5 +1,7 @@
 import logging
 import json
+import concurrent.futures
+
 from typing import List
 from modules.MistralApiClient import MistralApiClient
 from modules.PromptManager import PromptManager
@@ -19,7 +21,7 @@ class Agent:
 		Effectue la tâche et retourne le résultat.
 		"""
 		if self.promptManager:
-			prompt: str = self.promptManager.buildPrompt(self.name, taskDescription)
+			prompt: str = self.promptManager.buildPrompt(self.name, taskDescription, role="Agent")
 		else:
 			prompt = f"{self.name} doit {taskDescription}"
 		self.logger.info(f"{self.name} réalise la tâche : {taskDescription}")
@@ -43,16 +45,22 @@ class MotherAgent(Agent):
 		if self.promptManager:
 			prompt: str = self.promptManager.buildPrompt(
 				self.name,
-				f"Détermine le nombre d'agents nécessaires pour accomplir la tâche suivante en répondant par un JSON {{'agentCount': nombre}} : '{taskDescription}'"
+				f"Détermine le nombre d'agents nécessaires pour accomplir la tâche suivante. Réponds par un JSON correctement formaté avec des guillemets doubles, par exemple: {{\"agentCount\": 3}}. Tâche: '{taskDescription}'",
+				role="MotherAgent"
 			)
 		else:
 			prompt = (f"{self.name} doit décider combien d'agents sont nécessaires pour accomplir la tâche suivante : "
 					  f"'{taskDescription}'. Réponds uniquement par un nombre entier.")
 		response: str = self.apiClient.callModel(prompt, maxTokens=50)
 		try:
-			# Correction des guillemets pour respecter le format JSON
-			responseJson = json.loads(response.replace("'", "\""))
-			agentCount = int(responseJson.get("agentCount", 1))
+			# Correction des guillemets et vérification du format JSON
+			response_clean = response.replace("'", "\"")
+			responseJson = json.loads(response_clean)
+			if not isinstance(responseJson, dict):
+				raise ValueError("La réponse JSON n'est pas un dictionnaire")
+			agentCount = responseJson.get("agentCount")
+			if not isinstance(agentCount, int):
+				raise ValueError("La valeur de 'agentCount' n'est pas un entier")
 			self.logger.info(f"{self.name} a déterminé le nombre d'agents : {agentCount}")
 			return agentCount
 		except (json.JSONDecodeError, ValueError, AttributeError) as e:
@@ -71,9 +79,15 @@ class MotherAgent(Agent):
 
 	def delegateTasks(self, taskDescription: str) -> None:
 		"""
-		Délègue la tâche aux agents enfants.
+		Délègue la tâche aux agents enfants en appelant leurs API en parallèle.
 		"""
 		self.logger.info(f"{self.name} délègue la tâche '{taskDescription}' aux agents enfants.")
-		for agent in self.childAgents:
-			result: str = agent.performTask(taskDescription)
-			self.logger.info(f"Résultat de {agent.name} : {result}")
+		with concurrent.futures.ThreadPoolExecutor() as executor:
+			future_to_agent = {executor.submit(agent.performTask, taskDescription): agent for agent in self.childAgents}
+			for future in concurrent.futures.as_completed(future_to_agent):
+				agent = future_to_agent[future]
+				try:
+					result: str = future.result()
+					self.logger.info(f"Résultat de {agent.name} : {result}")
+				except Exception as e:
+					self.logger.error(f"Erreur lors de l'exécution de la tâche de {agent.name} : {e}")
